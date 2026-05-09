@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: smartload-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/smartload
+    username: smartload
+    password: smartload_dev
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+
+  config:
+    import: optional:file:.env[.properties]
+
+  mail:
+    host: ${SPRING_MAIL_HOST:smtp.gmail.com}
+    port: ${SPRING_MAIL_PORT:587}
+    username: emregulek77@gmail.com
+    password: lbtf glak nsnm qsfp
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-binding-errors: always
+
+logging:
+  level:
+    root: INFO
+    com.smartload: DEBUG
+    org.hibernate.SQL: WARN
+
+security:
+  jwt:
+    secret-key: SAWG2os9QOx0hNJjuKC0lKUdxQ8FBxXqR/DjcPNRYIc=
+    expiration-time: 3600000          # 1 saat (ms)
