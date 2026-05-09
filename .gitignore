@@ -51,3 +51,6 @@ application-local.properties
 ### Keys / certs (do not commit) ###
 *.pem
 *.key
+.DS_Store
+target/
+.env
