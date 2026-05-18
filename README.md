@@ -19,7 +19,7 @@ Spring Boot 3.2 + Java 21 + PostgreSQL 16.
 
 - Spring Boot 3.2 + Java 21
 - Spring Web, Data JPA, Security, Validation
-- PostgreSQL 16 driver + Flyway migration
+- PostgreSQL 16 driver + Spring Data JPA (Hibernate)
 - Apache POI 5 (Excel — Phase 1)
 - OpenPDF (PDF — Phase 5; LGPL safe per ADR-0016)
 - Lombok + MapStruct
@@ -29,12 +29,11 @@ Spring Boot 3.2 + Java 21 + PostgreSQL 16.
 
 - Application boots successfully.
 - `GET /api/health` returns 200.
-- Flyway runs `V1__init_schema.sql` (bootstrap table only).
 - Security permits all endpoints (locked down in Phase 6).
 
 ## Configuration
 
-`src/main/resources/application.yml` — defaults expect:
+`src/main/resources/application.properties` — defaults expect:
 - PostgreSQL on `localhost:5432`, db `smartload`, user `smartload` / `smartload_dev`
 - Override via env vars: `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, etc.
 
