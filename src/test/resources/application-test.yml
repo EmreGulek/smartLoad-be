@@ -11,3 +11,13 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create-drop
+
+# Fixed test secret (Base64) — not used in production
+security:
+  jwt:
+    secret-key: dGVzdC1qd3Qtc2VjcmV0LWtleS1mb3Itc21hcnRsb2FkLXRlc3Rz
+    expiration-time: 3600000
+
+smartload:
+  cors:
+    allowed-origins: http://localhost:5173

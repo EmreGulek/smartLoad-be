@@ -33,9 +33,25 @@ Spring Boot 3.2 + Java 21 + PostgreSQL 16.
 
 ## Configuration
 
-`src/main/resources/application.properties` — defaults expect:
-- PostgreSQL on `localhost:5432`, db `smartload`, user `smartload` / `smartload_dev`
-- Override via env vars: `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, etc.
+Secrets are **not** committed. Copy the template and fill locally:
+
+```bash
+cp .env.example .env
+# Edit .env — set SECURITY_JWT_SECRET_KEY (openssl rand -base64 32) and DB password
+```
+
+`src/main/resources/application.properties` loads optional `.env` via `spring.config.import`.
+
+| Variable | Purpose |
+|----------|---------|
+| `SPRING_DATASOURCE_*` | PostgreSQL (local or Neon) |
+| `SECURITY_JWT_SECRET_KEY` | JWT signing (Base64, required for login) |
+| `SPRING_MAIL_USERNAME` / `SPRING_MAIL_PASSWORD` | SMTP (optional locally) |
+| `CORS_ALLOWED_ORIGINS` | Frontend URLs (comma-separated) |
+
+Production (Render): set the same keys in the service **Environment** tab — do not commit `.env`.
+
+See **[DEPLOY.md](./DEPLOY.md)** for Render + Docker (`Dockerfile` in repo root).
 
 ## Frontend
 
