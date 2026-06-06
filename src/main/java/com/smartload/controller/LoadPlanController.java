@@ -216,6 +216,8 @@ public class LoadPlanController {
                 "utilizationPct", p.getUtilizationPct() != null ? p.getUtilizationPct() : 0,
                 "placedPackages", p.getPlacedPackages() != null ? p.getPlacedPackages() : 0,
                 "totalPackages", p.getTotalPackages() != null ? p.getTotalPackages() : 0,
+                "cgMacPct", p.getCgMacPct() != null ? p.getCgMacPct() : 0,
+                "cgStatus", p.getCgStatus() != null ? p.getCgStatus() : "",
                 "createdAt", p.getCreatedAt().toString()
             ))
             .collect(Collectors.toList());

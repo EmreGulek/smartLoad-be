@@ -6,6 +6,7 @@ import com.smartload.entity.LoadPlan;
 import com.smartload.entity.PackagePlacement;
 import com.smartload.entity.UldAssignment;
 import com.smartload.entity.UldType;
+import com.smartload.dto.CgResultDto;
 // NOTE: com.smartload.entity.Package is referred to as CargoPackage alias below
 //       to avoid clash with java.lang.Package (auto-imported from java.lang.*).
 import com.smartload.repository.AircraftPositionRepository;
@@ -74,6 +75,15 @@ public class BinPackingService {
     static final String ALGORITHM_ID = "EXTREME_POINTS_GREEDY_V1";
 
     /**
+     * CG balancing target in %MAC: centre of the safe envelope.
+     * (FWD_WARN + AFT_WARN) / 2 = (18 + 33) / 2 = 25.5 %MAC — see CgResultDto.
+     * When CG-aware placement is enabled, the greedy prefers the container that
+     * keeps the running aircraft CG closest to this target.
+     */
+    private static final double TARGET_MAC_PCT =
+        (CgResultDto.FWD_WARN_PCT + CgResultDto.AFT_WARN_PCT) / 2.0;
+
+    /**
      * Six 3D rotations of a box [W, H, L] → applied [appWidth, appHeight, appDepth].
      * appWidth  = lateral (ULD x-axis)
      * appHeight = vertical (ULD y-axis)
@@ -129,8 +139,27 @@ public class BinPackingService {
      */
     @Transactional
     public Long optimize(String manifestId, Long aircraftId, List<String> flightStops) {
+        // CG-aware placement is the default (V2). Use the 4-arg overload with
+        // cgAware=false to reproduce the CG-blind V1 baseline (thesis benchmark).
+        return optimize(manifestId, aircraftId, flightStops, true);
+    }
+
+    /**
+     * Optimisation with explicit CG-awareness toggle.
+     *
+     * @param cgAware when true and LOFO is not active, the greedy chooses, among
+     *                the containers that can fit each package, the one that keeps
+     *                the running aircraft CG closest to {@link #TARGET_MAC_PCT}.
+     *                When false, containers are tried in fixed display order
+     *                (nose→tail) — the CG-blind V1 baseline.
+     *                Note: when flightStops are given, LOFO accessibility ordering
+     *                takes precedence (operational hard rule) and CG ordering is
+     *                not applied, but final CG is still computed and recorded.
+     */
+    @Transactional
+    public Long optimize(String manifestId, Long aircraftId, List<String> flightStops, boolean cgAware) {
         long t0 = System.currentTimeMillis();
-        log.info("BinPacking START manifest={} aircraft={}", manifestId, aircraftId);
+        log.info("BinPacking START manifest={} aircraft={} cgAware={}", manifestId, aircraftId, cgAware);
 
         // ── 1. Load inputs ────────────────────────────────────────────────────
         List<com.smartload.entity.Package> packages = packageRepo.findByManifestId(manifestId);
@@ -211,12 +240,20 @@ public class BinPackingService {
         //
         List<com.smartload.entity.Package> unplaced = new ArrayList<>();
 
+        // Running cargo moment/weight across ALL containers — drives CG-aware
+        // placement and is cheap to maintain (one add per placed package).
+        double runningCargoMoment = 0;
+        double runningCargoWeight = 0;
+        boolean cgOrdering = cgAware && !hasStops;
+
         for (com.smartload.entity.Package pkg : sorted) {
             boolean placed = false;
+            double pkgKg = pkg.getGrossWeightKg() != null ? pkg.getGrossWeightKg() : 0;
 
             // Determine preferred container iteration order for this package
             List<UldContainer> iterOrder = containers; // default: display_order
             if (hasStops) {
+                // LOFO accessibility ordering takes precedence (operational hard rule).
                 String dest = pkg.getDestinationCode();
                 if (dest != null) {
                     Integer lo = stopToLoadOrder.get(dest.trim().toUpperCase());
@@ -225,15 +262,32 @@ public class BinPackingService {
                         if (preferred != null) iterOrder = preferred;
                     }
                 }
+            } else if (cgOrdering) {
+                // CG-aware: prefer the container that keeps running CG closest to target.
+                final double curMoment = runningCargoMoment;
+                final double curWeight = runningCargoWeight;
+                iterOrder = containers.stream()
+                    .sorted(Comparator.comparingDouble((UldContainer c) -> {
+                        double projMac = macPct(
+                            curMoment + pkgKg * c.position.getArmMm(),
+                            curWeight + pkgKg);
+                        return Math.abs(projMac - TARGET_MAC_PCT);
+                    }))
+                    .collect(Collectors.toList());
             }
 
+            UldContainer placedIn = null;
             for (UldContainer c : iterOrder) {
                 if (c.tryPlace(pkg)) {
+                    placedIn = c;
                     placed = true;
                     break;
                 }
             }
-            if (!placed) {
+            if (placed) {
+                runningCargoMoment += pkgKg * placedIn.position.getArmMm();
+                runningCargoWeight += pkgKg;
+            } else {
                 unplaced.add(pkg);
                 log.debug("Unplaced: pkg={} dims={}x{}x{}",
                     pkg.getId(), pkg.getLengthMm(), pkg.getWidthMm(), pkg.getHeightMm());
@@ -296,17 +350,32 @@ public class BinPackingService {
             }
         }
 
+        // ── 7b. Final CG (OEW + cargo) — recorded on the plan ─────────────────
+        double cargoMoment = used.stream()
+            .mapToDouble(c -> c.totalWeightKg * c.position.getArmMm()).sum();
+        double cgMacPct = macPct(cargoMoment, totalKg);
+        String cgStatus = classifyCg(cgMacPct);
+
+        boolean cgApplied = cgAware && !hasStops;
+        String algorithm = "EXTREME_POINTS_GREEDY_" + (cgApplied ? "V2_CG" : "V1")
+            + (hasStops ? "_LOFO" : "");
+
+        log.info("CG result: {}%MAC status={} (cgApplied={})",
+            String.format("%.1f", cgMacPct), cgStatus, cgApplied);
+
         // ── 8. Persist ────────────────────────────────────────────────────────
         LoadPlan plan = new LoadPlan();
         plan.setManifestId(manifestId);
         plan.setAircraftId(aircraftId);
-        plan.setAlgorithm(hasStops ? ALGORITHM_ID + "_LOFO" : ALGORITHM_ID);
+        plan.setAlgorithm(algorithm);
         plan.setStatus("OPTIMIZED");
         plan.setTotalPackages(packages.size());
         plan.setPlacedPackages(placed);
         plan.setTotalWeightKg(totalKg);
         plan.setUtilizationPct(Math.round(util * 10.0) / 10.0);
         plan.setUsedPositions(used.size());
+        plan.setCgMacPct(Math.round(cgMacPct * 10.0) / 10.0);
+        plan.setCgStatus(cgStatus);
         plan = loadPlanRepo.save(plan);
 
         for (UldContainer c : used) {
@@ -534,6 +603,32 @@ public class BinPackingService {
             Set<String> seen = new HashSet<>();
             extremePoints.removeIf(ep -> !seen.add(ep[0] + "," + ep[1] + "," + ep[2]));
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // CG helpers (shared envelope constants with CgResultDto)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Aircraft CG as %MAC for a given cargo moment + weight (OEW included).
+     * Same formula and constants as {@link CgResultDto}:
+     *   CG_arm = (OEW·OEW_arm + cargoMoment) / (OEW + cargoWeight)
+     *   %MAC   = (LEMAC − CG_arm) / MAC × 100
+     */
+    static double macPct(double cargoMoment, double cargoWeight) {
+        double totalWeight = CgResultDto.OEW_KG + cargoWeight;
+        double totalMoment = CgResultDto.OEW_KG * CgResultDto.OEW_ARM_MM + cargoMoment;
+        double cgArm = totalWeight > 0 ? totalMoment / totalWeight : CgResultDto.OEW_ARM_MM;
+        return (CgResultDto.LEMAC_MM - cgArm) / CgResultDto.MAC_MM * 100.0;
+    }
+
+    /** Classify %MAC into the envelope status used across the app. */
+    static String classifyCg(double macPct) {
+        if (macPct < CgResultDto.FWD_LIMIT_PCT) return "RED_FWD";
+        if (macPct < CgResultDto.FWD_WARN_PCT)  return "YELLOW_FWD";
+        if (macPct > CgResultDto.AFT_LIMIT_PCT) return "RED_AFT";
+        if (macPct > CgResultDto.AFT_WARN_PCT)  return "YELLOW_AFT";
+        return "GREEN";
     }
 
     // ══════════════════════════════════════════════════════════════════════════

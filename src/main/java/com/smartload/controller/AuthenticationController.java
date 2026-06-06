@@ -9,12 +9,16 @@ import com.smartload.entity.User;
 import com.smartload.service.AuthenticationService;
 import com.smartload.service.JwtService;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
 
 /**
  * Auth endpoints — public (no JWT required).
@@ -46,15 +50,26 @@ public class AuthenticationController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<LoginResponse> authenticate(@Valid @RequestBody LoginUserDto dto) {
-        User user = authenticationService.authenticate(dto);
-        String token = jwtService.generateToken(user);
-        LoginResponse response = new LoginResponse(
-            token,
-            jwtService.getExpirationTime(),
-            UserResponse.from(user)
-        );
-        return ResponseEntity.ok(response);
+    public ResponseEntity<?> authenticate(@Valid @RequestBody LoginUserDto dto) {
+        try {
+            User user = authenticationService.authenticate(dto);
+            String token = jwtService.generateToken(user);
+            LoginResponse response = new LoginResponse(
+                token,
+                jwtService.getExpirationTime(),
+                UserResponse.from(user)
+            );
+            return ResponseEntity.ok(response);
+        } catch (AuthenticationException e) {
+            // Wrong password (BadCredentialsException) or other Spring Security failure.
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("message", "Invalid email or password."));
+        } catch (RuntimeException e) {
+            // "User not found" / "Account not verified. Please verify your account."
+            String msg = e.getMessage() != null ? e.getMessage() : "Sign in failed.";
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Map.of("message", msg));
+        }
     }
 
     @PostMapping("/verify")

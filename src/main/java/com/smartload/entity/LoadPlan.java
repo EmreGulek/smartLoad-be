@@ -55,6 +55,18 @@ public class LoadPlan {
     @Column(name = "used_positions")
     private Integer usedPositions;
 
+    /**
+     * Final centre-of-gravity of the plan, expressed as %MAC (OEW + cargo).
+     * Recorded by the optimizer so CG is a first-class result field (benchmark
+     * metric + CG feasibility tracking). Null for legacy plans created before Faz 5.5.
+     */
+    @Column(name = "cg_mac_pct")
+    private Double cgMacPct;
+
+    /** CG envelope status: GREEN | YELLOW_FWD | YELLOW_AFT | RED_FWD | RED_AFT. */
+    @Column(name = "cg_status", length = 20)
+    private String cgStatus;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -84,5 +96,9 @@ public class LoadPlan {
     public void          setTotalWeightKg(Double v) { this.totalWeightKg = v; }
     public Integer       getUsedPositions()   { return usedPositions; }
     public void          setUsedPositions(Integer v) { this.usedPositions = v; }
+    public Double        getCgMacPct()        { return cgMacPct; }
+    public void          setCgMacPct(Double v) { this.cgMacPct = v; }
+    public String        getCgStatus()        { return cgStatus; }
+    public void          setCgStatus(String v) { this.cgStatus = v; }
     public LocalDateTime getCreatedAt()       { return createdAt; }
 }
