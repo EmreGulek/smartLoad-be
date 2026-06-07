@@ -69,7 +69,16 @@ public class LoadPlanController {
             return ResponseEntity.badRequest()
                 .body(Map.of("error", "manifestId is required"));
         }
-        Long planId = binPackingService.optimize(req.getManifestId(), req.getAircraftId(), req.getFlightStops());
+        String algo = req.getAlgorithm();
+        Long planId;
+        switch (algo) {
+            case "FFD" -> planId = binPackingService.optimizeFfd(
+                req.getManifestId(), req.getAircraftId(), req.getFlightStops());
+            case "V1"  -> planId = binPackingService.optimize(
+                req.getManifestId(), req.getAircraftId(), req.getFlightStops(), false);
+            default    -> planId = binPackingService.optimize(   // "V2" (CG-aware)
+                req.getManifestId(), req.getAircraftId(), req.getFlightStops(), true);
+        }
         return ResponseEntity.ok(Map.of("loadPlanId", planId));
     }
 

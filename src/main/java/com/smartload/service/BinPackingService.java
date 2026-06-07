@@ -410,6 +410,116 @@ public class BinPackingService {
         return plan.getId();
     }
 
+    /**
+     * Per-ULD gross-weight cap for the FFD baseline (kg).
+     * Real AHM data unavailable; ≈ a typical main-deck pallet max gross weight
+     * (~6 800 kg / 15 000 lb). Forces the naive FFD to spread load across several
+     * positions instead of dumping everything into the first bin — a fairer (less
+     * strawman) baseline while staying CG-blind and geometry-light.
+     */
+    private static final double FFD_MAX_ULD_WEIGHT_KG = 6_800.0;
+
+    /**
+     * Naive baseline: volume First-Fit Decreasing (FFD), CG-blind, no geometry.
+     *
+     * Classic 1-D bin-packing baseline for the thesis comparison: packages are
+     * sorted by volume (desc) and dropped into the first ULD (display order) whose
+     * remaining bounding-box volume AND per-ULD weight cap can still hold them.
+     * No extreme points, no rotation, no contour/overlap/support checks — so it
+     * OVERESTIMATES feasibility compared with the 3D EP-Greedy. The weight cap
+     * ({@link #FFD_MAX_ULD_WEIGHT_KG}) keeps the baseline from collapsing all
+     * cargo into a single position.
+     *
+     * Persists a LoadPlan with per-ULD assignments (no 3D placements). CG recorded.
+     */
+    @Transactional
+    public Long optimizeFfd(String manifestId, Long aircraftId, List<String> flightStops) {
+        long t0 = System.currentTimeMillis();
+
+        List<com.smartload.entity.Package> packages = packageRepo.findByManifestId(manifestId);
+        if (packages.isEmpty()) {
+            throw new IllegalArgumentException("No packages found for manifest " + manifestId);
+        }
+        List<AircraftPosition> positions =
+            positionRepo.findByAircraftIdAndIsActiveTrueOrderByDisplayOrderAsc(aircraftId);
+        if (positions.isEmpty()) {
+            throw new IllegalArgumentException("No active positions for aircraft " + aircraftId);
+        }
+
+        // Build volume bins (one per position).
+        List<VolumeBin> bins = new ArrayList<>();
+        for (AircraftPosition pos : positions) {
+            int[][] c = parseContour(pos.getUldType().getPointsJson());
+            int w = 0, h = 0;
+            for (int[] p : c) { w = Math.max(w, p[0]); h = Math.max(h, p[1]); }
+            bins.add(new VolumeBin(pos, (double) w * h * pos.getUldType().getLengthMm()));
+        }
+
+        // Sort packages by volume desc (the "decreasing" in FFD).
+        List<com.smartload.entity.Package> sorted = packages.stream()
+            .sorted(Comparator.comparingDouble(
+                (com.smartload.entity.Package p) -> p.getLengthMm() * p.getWidthMm() * p.getHeightMm()
+            ).reversed())
+            .collect(Collectors.toList());
+
+        int placed = 0;
+        double placedVol = 0;
+        for (com.smartload.entity.Package pkg : sorted) {
+            double vol = pkg.getLengthMm() * pkg.getWidthMm() * pkg.getHeightMm();
+            double kg  = pkg.getGrossWeightKg() != null ? pkg.getGrossWeightKg() : 0;
+            for (VolumeBin b : bins) {                  // first-fit in display order
+                if (b.used + vol <= b.capacity && b.weight + kg <= FFD_MAX_ULD_WEIGHT_KG) {
+                    b.used += vol; b.weight += kg; b.count++;
+                    placed++; placedVol += vol;
+                    break;
+                }
+            }
+        }
+
+        List<VolumeBin> used = bins.stream().filter(b -> b.count > 0).collect(Collectors.toList());
+        double totalCap = used.stream().mapToDouble(b -> b.capacity).sum();
+        double util     = totalCap > 0 ? placedVol / totalCap * 100.0 : 0.0;
+        double totalKg  = used.stream().mapToDouble(b -> b.weight).sum();
+        double cargoMoment = used.stream().mapToDouble(b -> b.weight * b.pos.getArmMm()).sum();
+        double cgMacPct = macPct(cargoMoment, totalKg);
+        String cgStatus = classifyCg(cgMacPct);
+
+        LoadPlan plan = new LoadPlan();
+        plan.setManifestId(manifestId);
+        plan.setAircraftId(aircraftId);
+        plan.setAlgorithm("FFD_VOLUME_V1");
+        plan.setStatus("OPTIMIZED");
+        plan.setTotalPackages(packages.size());
+        plan.setPlacedPackages(placed);
+        plan.setTotalWeightKg(totalKg);
+        plan.setUtilizationPct(Math.round(util * 10.0) / 10.0);
+        plan.setUsedPositions(used.size());
+        plan.setCgMacPct(Math.round(cgMacPct * 10.0) / 10.0);
+        plan.setCgStatus(cgStatus);
+        plan = loadPlanRepo.save(plan);
+
+        for (VolumeBin b : used) {
+            double bUtil = b.capacity > 0 ? b.used / b.capacity * 100.0 : 0.0;
+            assignmentRepo.save(new UldAssignment(
+                plan.getId(), b.pos.getId(), b.pos.getUldType().getId(),
+                b.weight, Math.round(bUtil * 10.0) / 10.0, b.count));
+        }
+
+        log.info("FFD DONE: placed={}/{} util={}% cg={}%MAC time={}ms",
+            placed, packages.size(), String.format("%.1f", util),
+            String.format("%.1f", cgMacPct), System.currentTimeMillis() - t0);
+        return plan.getId();
+    }
+
+    /** Volume bin for the naive FFD baseline. */
+    private static class VolumeBin {
+        final AircraftPosition pos;
+        final double capacity;
+        double used = 0, weight = 0;
+        int count = 0;
+        VolumeBin(AircraftPosition pos, double capacity) { this.pos = pos; this.capacity = capacity; }
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     // Inner data classes
     // ══════════════════════════════════════════════════════════════════════════

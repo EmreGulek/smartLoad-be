@@ -14,6 +14,8 @@ public class OptimizeRequest {
     private String       manifestId;
     private Long         aircraftId;   // default: 1 (B777F)
     private List<String> flightStops;  // ordered destination codes, first stop first
+    /** Algorithm choice: "FFD" | "V1" (CG-blind) | "V2" (CG-aware). Default "V2". */
+    private String       algorithm;
 
     public String       getManifestId()             { return manifestId; }
     public void         setManifestId(String v)     { this.manifestId = v; }
@@ -21,4 +23,6 @@ public class OptimizeRequest {
     public void         setAircraftId(Long v)       { this.aircraftId = v; }
     public List<String> getFlightStops()            { return flightStops; }
     public void         setFlightStops(List<String> v) { this.flightStops = v; }
+    public String       getAlgorithm()              { return algorithm != null ? algorithm : "V2"; }
+    public void         setAlgorithm(String v)      { this.algorithm = v; }
 }
